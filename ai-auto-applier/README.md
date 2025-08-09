@@ -12,11 +12,7 @@ AI Job Agent — интеллектуальный помощник для сои
 
 ## Структура репозитория
 
-- [BUSINESS_REQUIREMENTS.md](https://github.com/iamsheisyouare/ai-auto-applier/blob/main/BUSINESS_REQUIREMENTS.md) — бизнес-требования  
-- FUNCTIONAL_REQUIREMENTS.md — функциональные требования  
-- USER_STORIES.md — user stories с критериями приемки  
-- BPMN_diagrams.md — описание бизнес-процессов и диаграммы  
-- USE_CASES.md — диаграммы прецедентов (use cases)  
-- TECHNICAL_SPEC.md — технические требования и архитектура  
-- RISKS.md — риски и ограничения  
-- diagrams/ — папка с изображениями диаграмм  
+- `docs/` — документация и артефакты
+- `src/` — исходный код
+- `config/` — настройки
+- `scripts/` — автоматизация и утилиты
