@@ -1,0 +1,788 @@
+openapi: 3.0.4
+info:
+  title: AI Auto Applier API
+  version: 1.0.0
+  description: API для автоматического отклика на вакансии с сопроводительным письмом через GigaChat API и HH API
+
+servers:
+  - url: https://api.autoapplier.local
+    description: Dev server
+
+tags:
+  - name: Authorization
+    description: Авторизация и управление токенами
+  - name: Vacancies
+    description: Поиск, сохранение и управление вакансиями
+  - name: Filters
+    description: Сохранённые фильтры поиска вакансий
+  - name: Applications
+    description: Управление откликами на вакансии
+  - name: Resume
+    description: Загрузка и управление резюме
+  - name: CoverLetter
+    description: Генерация сопроводительных писем
+  - name: Internal
+    description: Внутренние эндпоинты
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/hh/authorize:
+    get:
+      tags:
+        - Authorization
+      summary: Сформировать URL для авторизации пользователя через hh.ru
+      description: >
+        Генерирует URL для перенаправления пользователя на hh.ru с параметрами
+        response_type=code, client_id, redirect_uri, state, skip_choose_account, force_login.
+      parameters:
+        - name: redirect_uri
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            type: string
+        - name: skip_choose_account
+          in: query
+          schema:
+            type: boolean
+        - name: force_login
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '302':
+          description: Редирект на hh.ru (Location header)
+        '400':
+          description: Некорректные параметры запроса
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/hh/callback:
+    get:
+      tags:
+        - Authorization
+      summary: Callback hh.ru для получения authorization_code и обмена на токены
+      description: >
+        Получение authorization_code из параметров запроса,
+        обмен его на access_token и refresh_token,
+        сохранение токенов.
+      parameters:
+        - name: code
+          in: query
+          schema:
+            type: string
+        - name: error
+          in: query
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Токены получены и сохранены
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiToken'
+        '400':
+          description: Ошибка авторизации или отказ пользователя
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/hh/refresh:
+    post:
+      tags:
+        - Authorization
+      summary: Обновить access_token с помощью refresh_token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_id
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Токен успешно обновлен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiToken'
+        '400':
+          description: Ошибка обновления токена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Нет прав для обновления токена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /vacancies/search:
+    get:
+      tags:
+        - Vacancies
+      summary: Поиск вакансий по фильтрам
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: city
+          in: query
+          schema:
+            type: string
+        - name: salary_min
+          in: query
+          schema:
+            type: integer
+        - name: salary_max
+          in: query
+          schema:
+            type: integer
+        - name: work_format
+          in: query
+          schema:
+            type: string
+            enum: [remote, office, hybrid]
+        - name: keywords
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Список вакансий, соответствующих фильтрам
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Vacancy'
+        '400':
+          description: Некорректные параметры запроса
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Необходима авторизация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /filters:
+    post:
+      tags:
+        - Filters
+      summary: Сохранить новый фильтр вакансий
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VacancyFilter'
+      responses:
+        '201':
+          description: Фильтр успешно сохранён
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VacancyFilter'
+        '400':
+          description: Некорректные данные фильтра
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Необходима авторизация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      tags:
+        - Filters
+      summary: Получить все сохранённые фильтры пользователя
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Список фильтров пользователя
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VacancyFilter'
+        '400':
+          description: Ошибка в параметрах запроса
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Необходима авторизация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /vacancies:
+    post:
+      tags:
+        - Vacancies
+      summary: Сохранить вакансию в БД
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Vacancy'
+      responses:
+        '201':
+          description: Вакансия успешно сохранена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Vacancy'
+        '400':
+          description: Ошибка в данных вакансии
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Необходима авторизация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /resume/upload:
+    post:
+      tags:
+        - Resume
+      summary: Загрузить резюме (файл)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                title:
+                  type: string
+      responses:
+        '200':
+          description: Резюме успешно загружено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Resume'
+        '400':
+          description: Ошибка загрузки файла
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Необходима авторизация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /cover-letter/generate:
+    post:
+      tags:
+        - CoverLetter
+      summary: Сгенерировать сопроводительное письмо через GigaChat
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CoverLetterRequest'
+      responses:
+        '200':
+          description: Сопроводительное письмо сгенерировано
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoverLetterResponse'
+        '400':
+          description: Неверные входные данные
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: Ошибка интеграции с GigaChat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Необходима авторизация
+
+  /applications:
+    post:
+      tags:
+        - Applications
+      summary: Создать отклик на вакансию
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplicationCreateRequest'
+      responses:
+        '201':
+          description: Отклик успешно создан (и при send_now — отправлен)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Application'
+        '400':
+          description: Некорректные данные отклика
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Необходима авторизация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Ошибка сервера или интеграции с HH/GigaChat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      tags:
+        - Applications
+      summary: Получить список откликов с фильтрацией
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: vacancy_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Список откликов
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Application'
+        '400':
+          description: Ошибка параметров запроса
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Необходима авторизация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /applications/{id}:
+    get:
+      tags:
+        - Applications
+      summary: Получить детали отклика по ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Информация об отклике
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Application'
+        '404':
+          description: Отклик не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Необходима авторизация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    patch:
+      tags:
+        - Applications
+      summary: Обновить статус отклика или текст сопроводительного письма
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  description: Новый статус отклика (например, sent, error)
+                cover_letter:
+                  type: string
+                  description: Обновленный текст сопроводительного письма
+      responses:
+        '200':
+          description: Отклик успешно обновлен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Application'
+        '400':
+          description: Некорректные данные обновления
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Отклик не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Необходима авторизация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /hh/send-application:
+    post:
+      tags:
+        - Internal
+      summary: Отправить отклик на hh.ru (внутренний endpoint)
+      description: >
+        Используется сервером для отправки отклика в hh.ru по access_token из ApiTokens.
+        Обычно вызывается автоматически при создании отклика с send_now=true.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - application_id
+              properties:
+                application_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: hh.ru подтвердил прием отклика
+        '400':
+          description: Некорректный запрос к hh.ru
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Нет валидного токена hh для пользователя
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: Ошибка интеграции с hh.ru
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    hhOAuth:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://hh.ru/oauth/authorize
+          tokenUrl: https://api.hh.ru/token
+          refreshUrl: https://api.hh.ru/token
+          scopes:
+            basic: Доступ к основным данным пользователя
+            resume: Чтение резюме пользователя
+            apply: Отклик на вакансии от имени пользователя
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 400
+        message:
+          type: string
+          example: Ошибка запроса
+
+    Vacancy:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Внутренний ID вакансии
+        hh_vacancy_id:
+          type: string
+          description: ID вакансии из hh.ru API
+        user_id:
+          type: string
+          format: uuid
+          description: Владелец вакансии (соискатель)
+        title:
+          type: string
+        company:
+          type: string
+        description:
+          type: string
+        url:
+          type: string
+        published_at:
+          type: string
+          format: date-time
+        fetched_at:
+          type: string
+          format: date-time
+
+    VacancyFilter:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        city:
+          type: string
+        salary_min:
+          type: integer
+        salary_max:
+          type: integer
+        work_format:
+          type: string
+          enum: [remote, office, hybrid]
+        keywords:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ApiToken:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        service_name:
+          type: string
+          enum: [hh.ru, gigaChat]
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Resume:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        content:
+          type: string
+          description: Текст резюме или JSONB со структурой
+        source:
+          type: string
+          description: hh | upload | manual
+        created_at:
+          type: string
+          format: date-time
+
+    CoverLetterRequest:
+      type: object
+      required:
+        - vacancy_description
+      properties:
+        vacancy_description:
+          type: string
+        resume_id:
+          type: string
+          format: uuid
+          description: ID резюме в БД (опционально)
+        resume_text:
+          type: string
+          description: Текст резюме (опционально)
+        tone:
+          type: string
+          enum: [formal, informal]
+          default: formal
+        max_length:
+          type: integer
+          description: Максимальная длина письма в символах (опционально)
+
+    CoverLetterResponse:
+      type: object
+      properties:
+        cover_letter:
+          type: string
+
+    Application:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        vacancy_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        applied_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          description: Статус отклика (sent, error, pending)
+        cover_letter:
+          type: string
+
+    ApplicationCreateRequest:
+      type: object
+      required:
+        - vacancy_id
+      properties:
+        vacancy_id:
+          type: string
+          description: ID вакансии в нашей БД или hh_vacancy_id
+        resume_id:
+          type: string
+          description: ID резюме в нашей БД (рекомендуется)
+        cover_letter:
+          type: string
+          description: Если не указан — backend сгенерирует через GigaChat
+        tone:
+          type: string
+          enum: [formal, informal]
+        send_now:
+          type: boolean
+          description: Если true — сразу пытаемся отправить отклик в hh.ru
