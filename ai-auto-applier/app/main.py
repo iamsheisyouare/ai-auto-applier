@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-import app.crud
+from app import crud
 from app.models import FilterSettings, Vacancy, Application
 from app.hh_oauth import build_hh_authorize_url, exchange_code_for_tokens, search_vacancies, apply_to_vacancy
 from app.gigachat_api import generate_cover_letter
@@ -64,6 +64,7 @@ class VacancySearchQuery(BaseModel):
     page: Optional[int] = 0
     per_page: Optional[int] = 20
 
+#POST для объемных запросов
 @app.post("/vacancies/search", tags=["Vacancies"])
 async def vacancies_search(q: VacancySearchQuery, request: Request, db: Session = Depends(get_db)):
     user_id = current_user_id(request)
@@ -71,6 +72,26 @@ async def vacancies_search(q: VacancySearchQuery, request: Request, db: Session 
     try:
         resp = await search_vacancies(db, user_id, params)
         return resp
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+
+@app.get("/vacancies/search", tags=["Vacancies"])
+async def vacancies_search_get(
+        request: Request,
+        text: str = Query(None),
+        area: str = Query(None),
+        salary: int = Query(None),
+        page: int = Query(0),
+        per_page: int = Query(20),
+        db: Session = Depends(get_db),
+):
+    user_id = current_user_id(request)
+    params = {k: v for k, v in {
+        "text": text, "area": area, "salary": salary,
+        "page": page, "per_page": per_page
+    }.items() if v is not None}
+    try:
+        return await search_vacancies(db, user_id, params)
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
 

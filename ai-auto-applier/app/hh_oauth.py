@@ -123,6 +123,8 @@ async def search_vacancies(db: Session, user_id, params: dict) -> dict:
         r.raise_for_status()
         return r.json()
 
+
+
 async def apply_to_vacancy(db: Session, user_id, vacancy_id: str, resume_id: str, message: str) -> dict:
     """
     Отправка отклика. В HH используются /negotiations c телом, включающим vacancy_id, resume_id и сообщение.
