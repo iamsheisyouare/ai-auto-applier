@@ -48,6 +48,8 @@ class Vacancy(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     hh_vacancy_id = Column(String(50))
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    area_id = Column(Integer, ForeignKey("areas.id"))
+    area = relationship("Area")
     title = Column(String(255))
     company = Column(String(255))
     description = Column(Text)
@@ -101,3 +103,16 @@ class ApiToken(Base):
     updated_at = Column(TIMESTAMP, onupdate=lambda: datetime.datetime.now(datetime.UTC))
 
     user = relationship("User", back_populates="api_tokens")
+
+class Area(Base):
+    __tablename__ = "areas"
+    id = Column(Integer, primary_key=True)               # ID из HH
+    name = Column(String, nullable=False)                # Текстовое название
+    parent_id = Column(Integer, ForeignKey("areas.id"))  # Вложенность (локально не обязательна)
+    parent = relationship("Area", remote_side=[id])
+
+class ProfessionalRole(Base):
+    __tablename__ = "professional_roles"
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    category = Column(String, nullable=True)
