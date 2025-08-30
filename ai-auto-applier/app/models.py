@@ -1,6 +1,6 @@
 import datetime
 import uuid
-from sqlalchemy import Column, String, Integer, Text, ForeignKey, TIMESTAMP, Boolean
+from sqlalchemy import Column, String, Integer, Text, ForeignKey, TIMESTAMP, Boolean, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, declarative_base
 
@@ -50,7 +50,11 @@ class Vacancy(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     area_id = Column(Integer, ForeignKey("areas.id"))
     area = relationship("Area")
+    professional_role_id = Column(Integer, ForeignKey("professional_roles.id"), nullable=True)
+    professional_role = relationship("ProfessionalRole")
+    work_format = Column(String(50), nullable=True)  # например: "remote", "office", "hybrid"
     title = Column(String(255))
+    experience = Column(String(50))
     company = Column(String(255))
     description = Column(Text)
     url = Column(String(500))
@@ -98,9 +102,9 @@ class ApiToken(Base):
     service_name = Column(String(50))
     access_token = Column(Text)
     refresh_token = Column(Text)
-    expires_at = Column(TIMESTAMP)
-    created_at = Column(TIMESTAMP, default=lambda: datetime.datetime.now(datetime.UTC))
-    updated_at = Column(TIMESTAMP, onupdate=lambda: datetime.datetime.now(datetime.UTC))
+    expires_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    updated_at = Column(DateTime(timezone=True), onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
 
     user = relationship("User", back_populates="api_tokens")
 
@@ -116,3 +120,11 @@ class ProfessionalRole(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     category = Column(String, nullable=True)
+
+class Industry(Base):
+    __tablename__ = "industries"
+    id = Column(String(50), primary_key=True)
+    name = Column(String, nullable=False)
+    category = Column(String, nullable=True)
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.datetime.now(datetime.UTC),
+                        onupdate=lambda: datetime.datetime.now(datetime.UTC))

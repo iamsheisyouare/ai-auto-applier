@@ -16,6 +16,8 @@ load_dotenv()
 HH_CLIENT_ID = os.getenv("HH_CLIENT_ID")
 HH_CLIENT_SECRET = os.getenv("HH_CLIENT_SECRET")
 HH_REDIRECT_URI = os.getenv("HH_REDIRECT_URI", "http://localhost:8000/auth/hh/callback")
+HH_USER_AGENT_EMAIL = os.getenv("HH_USER_AGENT_EMAIL")
+DEV_USER_ID = os.getenv("DEV_USER_ID")
 
 # URLs для API hh.ru
 AUTH_URL = "https://hh.ru/oauth/authorize" # для авторизации пользователя
@@ -80,7 +82,7 @@ async def exchange_code_for_tokens(db: Session, user_id, code: str):
     expires_in = j.get("expires_in")  # в секундах
     expires_at = None
     if expires_in:
-        expires_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=int(expires_in))
+        expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=int(expires_in))
 
     # Сохраняем в БД
     return upsert_api_token(db, user_id, "hh.ru", access_token, refresh_token, expires_at)
@@ -111,27 +113,31 @@ async def refresh_hh_access_token(db: Session, user_id):
     expires_in = j.get("expires_in")
     expires_at = None
     if expires_in:
-        expires_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=int(expires_in))
+        expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=int(expires_in))
 
     return upsert_api_token(db, user_id, "hh.ru", access_token, refresh_token, expires_at)
 
 # Получение заголовков для авторизованных запросов
-async def hh_authorized_headers(db: Session, user_id) -> dict:
+async def hh_authorized_headers(db: Session, user_id=None) -> dict:
     """
     Возвращает словарь headers с действующим access_token.
     Если токен устарел — обновляет.
-    HH-User-Agent обязателен для справочников.
     """
+    if user_id is None:
+        if DEV_USER_ID is None:
+            raise RuntimeError("DEV_USER_ID не задан в .env")
+        user_id = DEV_USER_ID  # используем тестовый user_id
+
     token = get_api_token(db, user_id, "hh.ru")
     if not token:
         raise RuntimeError("Токен hh.ru не найден, авторизуйтесь")
 
-    if token.expires_at and token.expires_at <= datetime.datetime.now(datetime.UTC):
+    if token.expires_at and token.expires_at <= datetime.datetime.now(datetime.timezone.utc):
         token = await refresh_hh_access_token(db, user_id)
 
     return {
         "Authorization": f"Bearer {token.access_token}",
-        "HH-User-Agent": "AI-Auto-Applier/1.0 (your-email@example.com)"
+        "HH-User-Agent": f"AI-Auto-Applier/1.0 ({HH_USER_AGENT_EMAIL})"
     }
 
 # ===================== ВАКАНСИИ =====================
@@ -146,6 +152,49 @@ async def search_vacancies(db: Session, user_id, params: dict) -> dict:
         r = await client.get(VACANCIES_URL, headers=headers, params=params)
         r.raise_for_status()
         return r.json()
+
+# Построение параметров поиска через словарь фильтров
+def build_vacancy_search_params(filters: dict) -> dict:
+    params = {
+        "per_page": filters.get("per_page", 20),
+        "page": filters.get("page", 0),
+        "no_magic": "true",
+    }
+    for key in ["professional_role", "experience", "area", "work_format", "text", "salary"]:
+        if filters.get(key):
+            params[key] = filters[key]
+    if filters.get("salary"):
+        params["only_with_salary"] = "true"
+    return params
+
+# Проверка, что area_id существует в справочнике
+def is_valid_area(area_id: int, valid_areas: set) -> bool:
+    return area_id in valid_areas
+
+# Сохранение вакансий в БД
+def save_vacancies_to_db(db: Session, user_id, vacancies_data, valid_areas: set):
+    for vac in vacancies_data.get("items", []):
+        area_id = int(vac["area"]["id"])
+
+        # проверка валидности area_id
+        if not is_valid_area(area_id, valid_areas):
+            print(f"⚠️ Пропущена вакансия {vac['id']} — неизвестный area_id: {area_id}")
+            continue
+
+        vacancy = Vacancy(
+            hh_vacancy_id=vac["id"],
+            user_id=user_id,
+            area_id=area_id,
+            title=vac["name"],
+            experience=vac.get("experience", {}).get("id"),
+            company=vac["employer"]["name"] if vac.get("employer") else None,
+            description=vac.get("snippet", {}).get("requirement"),
+            url=vac["alternate_url"],
+            published_at=vac["published_at"]
+        )
+        db.add(vacancy)
+
+    db.commit()
 
 # Отправка отклика на вакансию
 async def apply_to_vacancy(db: Session, user_id, vacancy_id: str, resume_id: str, message: str) -> dict:
@@ -168,21 +217,6 @@ async def apply_to_vacancy(db: Session, user_id, vacancy_id: str, resume_id: str
 
 # ===================== СПРАВОЧНИКИ =====================
 # Только через OAuth, с HH-User-Agent
-
-# Получение ключевых навыков
-async def get_skills(db: Session, user_id, ids: list[int], locale: str = "RU") -> dict:
-    """
-    ids — список ID навыков (максимум 50)
-    locale — RU или EN
-    """
-    headers = await hh_authorized_headers(db, user_id)
-    params = [("id", str(i)) for i in ids] + [("locale", locale)]
-    url = "https://api.hh.ru/skills"
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(url, headers=headers, params=params)
-        r.raise_for_status()
-        return r.json()
-
 
 # Получение профессиональных ролей
 async def get_professional_roles(db: Session, user_id, locale: str = "RU") -> dict:

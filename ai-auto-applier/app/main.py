@@ -7,11 +7,11 @@ from fastapi import FastAPI, Depends, Request, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-
 from app.database import SessionLocal
 from app import crud
-from app.models import FilterSettings, Vacancy, Application
-from app.hh_oauth import build_hh_authorize_url, exchange_code_for_tokens, search_vacancies, apply_to_vacancy
+from app.models import FilterSettings, Vacancy, Application, Area
+from app.hh_oauth import (build_hh_authorize_url, exchange_code_for_tokens, search_vacancies,
+                          build_vacancy_search_params, save_vacancies_to_db, apply_to_vacancy)
 from app.gigachat_api import generate_cover_letter
 
 app = FastAPI(title="AI Auto Applier MVP")
@@ -29,6 +29,12 @@ def get_db():
 def current_user_id(request: Request) -> str:
     # В реальном проекте — JWT/сессия. Здесь — заглушка
     return request.headers.get("X-User-Id") or os.getenv("DEV_USER_ID") or str(uuid.uuid4())
+
+
+@app.get("/test")
+async def test():
+    print("✅ Это print в консоль")
+    return {"message": "Логи работают!"}
 
 # ====== HH OAuth ======
 @app.get("/auth/hh/authorize", tags=["Authorization"])
@@ -56,42 +62,61 @@ async def hh_callback(code: Optional[str] = None, error: Optional[str] = None, r
     token = await exchange_code_for_tokens(db, user_id, code)
     return {"status": "ok", "service": "hh.ru", "expires_at": token.expires_at}
 
+
 # ====== Поиск вакансий через HH ======
 class VacancySearchQuery(BaseModel):
     text: Optional[str] = None
-    area: Optional[str] = None
+    professional_role: Optional[str] = None  # название роли
+    experience: Optional[str] = None
+    area: Optional[str] = None               # название региона/города
+    work_format: Optional[str] = None        # remote, office, hybrid
     salary: Optional[int] = None
     page: Optional[int] = 0
     per_page: Optional[int] = 20
 
-#POST для объемных запросов
-@app.post("/vacancies/search", tags=["Vacancies"])
-async def vacancies_search(q: VacancySearchQuery, request: Request, db: Session = Depends(get_db)):
-    user_id = current_user_id(request)
-    params = {k: v for k, v in q.model_dump().items() if v is not None}
-    try:
-        resp = await search_vacancies(db, user_id, params)
-        return resp
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+# Получаем valid_areas из БД
+def get_valid_areas(db: Session) -> set[int]:
+    return {area.id for area in db.query(Area.id).all()}
 
 @app.get("/vacancies/search", tags=["Vacancies"])
 async def vacancies_search_get(
         request: Request,
         text: str = Query(None),
+        professional_role: str = Query(None),
+        experience: str = Query(None),
         area: str = Query(None),
+        work_format: str = Query(None),
         salary: int = Query(None),
         page: int = Query(0),
         per_page: int = Query(20),
         db: Session = Depends(get_db),
 ):
     user_id = current_user_id(request)
-    params = {k: v for k, v in {
-        "text": text, "area": area, "salary": salary,
-        "page": page, "per_page": per_page
-    }.items() if v is not None}
+
+    # Собираем параметры в словарь
+    params_dict = {
+        "text": text,
+        "professional_role": professional_role,
+        "experience": experience,
+        "area": area,
+        "work_format": work_format,
+        "salary": salary,
+        "page": page,
+        "per_page": per_page,
+    }
+
+    # Формируем корректные параметры для HH API
+    filtered_params = build_vacancy_search_params(params_dict)
+
+    # Получаем все валидные area_id из БД
+    valid_areas = get_valid_areas(db)
+
     try:
-        return await search_vacancies(db, user_id, params)
+        # Запрос к HH
+        resp = await search_vacancies(db, user_id, filtered_params)
+        # Сохраняем вакансии в БД
+        save_vacancies_to_db(db, user_id, resp, valid_areas)
+        return resp
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
 
@@ -167,7 +192,6 @@ async def create_application_endpoint(body: ApplicationCreateIn, request: Reques
             crud.update_application_status(db, app_obj.id, status="error")
             crud.add_log(db, user_id, "application_error", e.response.text)
             raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
-
     return {
         "application_id": str(app_obj.id),
         "status": app_obj.status,
