@@ -1,7 +1,6 @@
 import os
 import uuid
-from typing import Optional, List
-
+from typing import Optional
 import httpx
 from fastapi import FastAPI, Depends, Request, HTTPException, Query
 from fastapi.responses import RedirectResponse
@@ -11,7 +10,8 @@ from app.database import SessionLocal
 from app import crud
 from app.models import FilterSettings, Vacancy, Application, Area
 from app.hh_oauth import (build_hh_authorize_url, exchange_code_for_tokens, search_vacancies,
-                          build_vacancy_search_params, save_vacancies_to_db, apply_to_vacancy)
+                          build_vacancy_search_params, save_vacancies_to_db, apply_to_vacancy,
+                          update_vacancy_description_in_db)
 from app.gigachat_api import generate_cover_letter
 
 app = FastAPI(title="AI Auto Applier MVP")
@@ -119,6 +119,14 @@ async def vacancies_search_get(
         return resp
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+
+@app.get("/vacancies/{vacancy_id}/update_description", tags=["Vacancies"])
+async def update_vacancy_description(vacancy_id: str, request: Request, db: Session = Depends(get_db)):
+    user_id = current_user_id(request)
+    updated = await update_vacancy_description_in_db(db, user_id, vacancy_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Vacancy not found in DB")
+    return {"vacancy_id": vacancy_id, "updated_description": True}
 
 # ====== Генерация сопроводительного письма ======
 class CoverLetterIn(BaseModel):

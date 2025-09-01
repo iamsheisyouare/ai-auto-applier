@@ -153,6 +153,24 @@ async def search_vacancies(db: Session, user_id, params: dict) -> dict:
         r.raise_for_status()
         return r.json()
 
+async def update_vacancy_description_in_db(db: Session, user_id: str, vacancy_id: str) -> bool:
+    headers = await hh_authorized_headers(db, user_id)
+    vacancy_url = f"https://api.hh.ru/vacancies/{vacancy_id}"
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(vacancy_url, headers=headers)
+        if r.status_code != 200:
+            return False
+        data = r.json()
+
+    full_description = data.get("description", "")
+    vacancy = db.query(Vacancy).filter(Vacancy.hh_vacancy_id == vacancy_id).first()
+    if not vacancy:
+        return False
+
+    vacancy.description = full_description
+    db.commit()
+    return True
+
 # Построение параметров поиска через словарь фильтров
 def build_vacancy_search_params(filters: dict) -> dict:
     params = {

@@ -9,12 +9,13 @@ from app.crud import get_api_token, upsert_api_token
 
 load_dotenv()
 
-GIGA_AUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
-GIGA_API_BASE = "https://gigachat.devices.sberbank.ru"
+# Подгружаем конфиги из .env
+GIGA_AUTH_URL = os.getenv("GIGACHAT_OAUTH_URL", "https://ngw.devices.sberbank.ru:9443/api/v2/oauth")
+GIGA_API_BASE = os.getenv("GIGACHAT_API_URL", "https://gigachat.devices.sberbank.ru/api/v1")
 GIGA_SCOPE = os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
 
-# Basic <Authorization key> — см. личный кабинет GigaChat
-GIGA_AUTH_BASIC = os.getenv("GIGACHAT_AUTH_BASIC")
+# Authorization Key (Basic <base64(ClientID:Secret)>), полученный в кабинете
+GIGA_AUTH_BASIC = os.getenv("GIGACHAT_API_KEY")
 
 def _now():
     return datetime.datetime.now(datetime.UTC)
@@ -24,23 +25,27 @@ async def _get_fresh_giga_token(db: Session, user_id):
     Получить новый access token GigaChat по Basic-схеме.
     """
     if not GIGA_AUTH_BASIC:
-        raise RuntimeError("GIGACHAT_AUTH_BASIC не задан")
+        raise RuntimeError("❌ GIGACHAT_API_KEY не задан в .env")
 
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
-        "RqUID": str(uuid.uuid4()),
-        "Authorization": f"Basic {GIGA_AUTH_BASIC}",
+        "RqUID": str(uuid.uuid4()),  # уникальный идентификатор запроса
+        "Authorization": f"Basic {GIGA_AUTH_BASIC}",  # Используем твой ключ
     }
     data = {"scope": GIGA_SCOPE}
+
     async with httpx.AsyncClient(timeout=30, verify=True) as client:
         r = await client.post(GIGA_AUTH_URL, headers=headers, data=data)
         r.raise_for_status()
         j = r.json()
 
     access_token = j.get("access_token")
+    if not access_token:
+        raise RuntimeError(f"❌ Не удалось получить access_token: {j}")
+
+    # Определяем срок жизни токена
     expires_at = None
-    # У GigaChat токен ~30 минут. Если вернулся expires_at/expires_in — учитываем.
     if "expires_at" in j:
         try:
             expires_at = datetime.datetime.fromisoformat(j["expires_at"])
@@ -53,7 +58,7 @@ async def _get_fresh_giga_token(db: Session, user_id):
     else:
         expires_at = _now() + datetime.timedelta(minutes=29)
 
-    # сохраняем как сервис "gigaChat"
+    # сохраняем в БД токен для сервиса "gigaChat"
     return upsert_api_token(db, user_id, "gigaChat", access_token, None, expires_at)
 
 async def giga_bearer(db: Session, user_id) -> str:
@@ -65,10 +70,16 @@ async def giga_bearer(db: Session, user_id) -> str:
         tok = await _get_fresh_giga_token(db, user_id)
     return tok.access_token
 
-async def generate_cover_letter(db: Session, user_id, vacancy_text: str, resume_text: str, tone: str = "formal", max_length: int | None = None) -> str:
+async def generate_cover_letter(
+    db: Session,
+    user_id,
+    vacancy_text: str,
+    resume_text: str,
+    tone: str = "formal",
+    max_length: int | None = None
+) -> str:
     """
     Генерация сопроводительного письма через GigaChat.
-    Здесь используем chat-completions-подобный эндпоинт (проверь точный у себя в кабинете).
     """
     bearer = await giga_bearer(db, user_id)
 
@@ -96,15 +107,13 @@ async def generate_cover_letter(db: Session, user_id, vacancy_text: str, resume_
         "Content-Type": "application/json",
     }
 
-    url = f"{GIGA_API_BASE}/api/v1/chat/completions"
+    url = f"{GIGA_API_BASE}/chat/completions"
     async with httpx.AsyncClient(timeout=60) as client:
         r = await client.post(url, headers=headers, json=payload)
         r.raise_for_status()
         j = r.json()
 
-    # адаптируй под фактический формат ответа GigaChat
     try:
         return j["choices"][0]["message"]["content"]
     except Exception:
-        # про запас
         return str(j)
