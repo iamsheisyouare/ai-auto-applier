@@ -12,7 +12,7 @@ from app.models import FilterSettings, Vacancy, Application, Area
 from app.hh_oauth import (build_hh_authorize_url, exchange_code_for_tokens, search_vacancies,
                           build_vacancy_search_params, save_vacancies_to_db, apply_to_vacancy,
                           update_vacancy_description_in_db)
-from app.gigachat_api import generate_cover_letter
+from app.gigachat_api import generate_cover_letter,giga_bearer
 
 app = FastAPI(title="AI Auto Applier MVP")
 
@@ -127,6 +127,17 @@ async def update_vacancy_description(vacancy_id: str, request: Request, db: Sess
     if not updated:
         raise HTTPException(status_code=404, detail="Vacancy not found in DB")
     return {"vacancy_id": vacancy_id, "updated_description": True}
+
+# ====== Работа с GigaChat ======
+@app.get("/gigachat/token", tags=["GigaChat"])
+async def get_gigachat_token(request: Request, db: Session = Depends(get_db)):
+    """
+    Возвращает действующий Bearer токен GigaChat (автообновляется если истёк).
+    """
+    user_id = current_user_id(request)
+    from app.gigachat_api import giga_bearer
+    token = await giga_bearer(db, user_id)
+    return {"access_token": token}
 
 # ====== Генерация сопроводительного письма ======
 class CoverLetterIn(BaseModel):
